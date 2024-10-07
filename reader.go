@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
+	"encoding/ascii85"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -498,8 +499,8 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 	filter := ""
 	if _, ok := compressedObj.Value.Dictionary["/Filter"]; ok {
 		filter = compressedObj.Value.Dictionary["/Filter"].Token
-		if filter != "/FlateDecode" {
-			return nil, errors.New("Unsupported filter - expected /FlateDecode, got: " + filter)
+		if filter != "/FlateDecode" && filter != "/ASCII85Decode" {
+			return nil, errors.New("Unsupported filter - expected /FlateDecode or /ASCII85Decode, got: " + filter)
 		}
 	}
 
@@ -513,6 +514,14 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 
 		// Set stream to uncompressed data
 		compressedObj.Stream.Bytes = out.Bytes()
+	} else if filter == "/ASCII85Decode" {
+		// Decode ASCII85 encoded data
+		decoded := make([]byte, len(compressedObj.Stream.Bytes)*4/5)
+		decodedLen, _, err := ascii85.Decode(decoded, compressedObj.Stream.Bytes, true)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to decode ASCII85 stream")
+		}
+		compressedObj.Stream.Bytes = decoded[:decodedLen]
 	}
 
 	// Get io.Reader for bytes
@@ -1429,6 +1438,13 @@ func (this *PdfReader) rebuildContentStream(content *PdfValue) ([]byte, error) {
 
 			// Set stream to uncompressed data
 			stream = out.Bytes()
+		case "/ASCII85Decode":
+			// Decode ASCII85 encoded data
+			decoded, err := io.ReadAll(ascii85.NewDecoder(bytes.NewBuffer(stream)))
+			if err != nil {
+				return nil, errors.Wrap(err, "Failed to decode ASCII85 stream")
+			}
+			stream = decoded
 		default:
 			return nil, errors.New("Unspported filter: " + filters[i].Token)
 		}
